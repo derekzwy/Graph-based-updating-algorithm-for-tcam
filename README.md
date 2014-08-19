@@ -1,4 +1,6 @@
-fast-tcam-update-algorithm
+Graph-based-updating algorithm for tcam
 ==========================
 
-Graph based split and update algorithm 
+Use the graph to compute the updating cost and insert new rules.
+Split the graph for lower updating cost.
+
