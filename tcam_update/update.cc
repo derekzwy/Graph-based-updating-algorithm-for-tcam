@@ -278,47 +278,115 @@ void graph_del(pc_rule *r)
     //n->valid = false;
 }
 
-void Graph_add(tcam & tmap, vector<pc_rule> pc_graph, vector<struct node *> &G)//, int pos) 
+bool cmp(const node* n1, const node* n2)
 {
-    int pos;
+    return (*n1).index < (*n2).index;
+}
 
-    for(auto r = pc_graph.begin(); r != pc_graph.end(); r ++) {
-    
-        pos = (*r).n->index;        
-        //cout<<"pos = "<<pos<<" ruleid = "<<(*r)->ruleid<<endl; 
+void Graph_add(tcam & tmap, vector<pc_rule> pc_graph, vector<struct node *> &G , int invaild_pos)
+{
+    int interval_start;
+    if(invaild_pos != -1) {
+        interval_start = invaild_pos + 1; 
 
-        list<struct node *> update;
-
-        if((*r).n->in.size() != 0 || (*r).n->out.size() != 0){
-            //cout<<"graph_del"<<endl;
-            graph_del(&(*r));
+        for(int i = 0; i < pc_graph.size(); i ++)  
+        {
+           for(auto parent = pc_graph[i].n->in.begin(); parent != pc_graph[i].n->in.end(); parent ++)  
+           { 
+            if(tmap.valid[(*parent)->index] == true) {
+                if((*parent)->out[0] == pc_graph[i].n) {
+                    (*parent)->out.erase((*parent)->out.begin());
+                    (*parent)->move = -1;
+                    dfs((*parent));
+                }
+                else {
+                    struct node *n= pc_graph[i].n;
+                    auto tail = remove_if((*parent)->out.begin(), (*parent)->out.end(), [n](struct node *outn){return outn == n;});
+                    (*parent)->out.erase(tail, (*parent)->out.end());
+                }
+                auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i].n, cmp);
+                (*parent)->out.insert(insert_pos, pc_graph[i].n);
+            }
+            }
+            for(int j = interval_start; j < pc_graph[i].n->index; j ++) {
+                if(overlap(&tmap.pc[j], &pc_graph[i]) && tmap.pc[j].ruleid < pc_graph[i].ruleid && tmap.valid[j] == true) {
+                    pc_graph[i].n->in.push_back(tmap.pc[j].n);
+                    auto insert_pos = lower_bound(tmap.pc[j].n->out.begin(), tmap.pc[j].n->out.end(), pc_graph[i].n, cmp);
+                    tmap.pc[j].n->out.insert(insert_pos, pc_graph[i].n);
+                }
+           }
+           interval_start = pc_graph[i].n->index + 1;
         }
+    }
+    else {
+        interval_start = pc_graph[0].n->index + 1;
+        
+        if(pc_graph.size() > 1) {
+
+        for(int i = 0; i < pc_graph.size(); i ++)  
+        {
+           for(auto parent = pc_graph[i].n->in.begin(); parent != pc_graph[i].n->in.end(); parent ++)  
+           { 
+            if(tmap.valid[(*parent)->index] == true) {
+                if((*parent)->out[0] == pc_graph[i].n) {
+                    (*parent)->out.erase((*parent)->out.begin());
+                    (*parent)->move = -1;
+                    dfs((*parent));
+                    //compute_cost((*parent));
+                }
+                else {
+                    struct node *n= pc_graph[i].n;
+                    auto tail = remove_if((*parent)->out.begin(), (*parent)->out.end(), [n](struct node *outn){return outn == n;});
+                    (*parent)->out.erase(tail, (*parent)->out.end());
+                }
+                auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i].n, cmp);
+                (*parent)->out.insert(insert_pos, pc_graph[i].n);
+            }
+            }
+            for(int j = interval_start; j < pc_graph[i].n->index; j ++) {
+                if(overlap(&tmap.pc[j], &pc_graph[i]) && tmap.pc[j].ruleid < pc_graph[i].ruleid && tmap.valid[j] == true) {
+                    pc_graph[i].n->in.push_back(tmap.pc[j].n);
+                    auto insert_pos = lower_bound(tmap.pc[j].n->out.begin(), tmap.pc[j].n->out.end(), pc_graph[i].n, cmp);
+                    tmap.pc[j].n->out.insert(insert_pos, pc_graph[i].n);
+                }
+           }
+           interval_start = pc_graph[i].n->index + 1;
+        }
+        }
+        
+        auto r = pc_graph.begin();
+
+        int pos = (*r).n->index;
+        list<struct node *> update;
     
         for(int i = 0; i < pos; i++) {
-            if(overlap(&tmap.pc[i], &(*r)) && tmap.valid[i] == true && tmap.pc[i].ruleid < (*r).ruleid) {
+        if(overlap(&tmap.pc[i], &(*r)) && tmap.valid[i] == true && tmap.pc[i].ruleid < (*r).ruleid) {
             //if(overlap(&tmap.pc[i], r)) {
                  //cout<<"find overlap in tcam "<<i<<endl;
-                if(G[i]->index >= (*r).n->index){
-                    cout<<"out cycle "<<G[i]->index<<" >= "<<(*r).n->index<<endl;
-                    getchar();
-                    continue;
-                }
-                for(size_t j = 0; j < G[i]->out.size(); j++) {
-                    if(pos < (G[i]->out[j])->index ) {
-                        G[i]->out.insert(G[i]->out.begin() + j, (*r).n);
-                        break;
-                    }
-                }
-                if(G[i]->out.size() == 0 || G[i]->out[G[i]->out.size()-1]->index < pos) {
-                    G[i]->out.push_back((*r).n);
-                }
-
-                (*r).n->in.push_back(G[i]);
-
-                if(G[i]->out[0] == (*r).n) {              
-                    update.push_back(G[i]);
-                }
+            if(G[i]->index >= (*r).n->index){
+                cout<<"out cycle "<<G[i]->index<<" >= "<<(*r).n->index<<endl;
+                getchar();
+                continue;
             }
+            /*for(size_t j = 0; j < G[i]->out.size(); j++) {
+                if(pos < (G[i]->out[j])->index ) {
+                    G[i]->out.insert(G[i]->out.begin() + j, (*r).n);
+                    break;
+                }
+            }*/
+            auto insert_pos = lower_bound(G[i]->out.begin(), G[i]->out.end(), (*r).n, cmp);
+            G[i]->out.insert(insert_pos, (*r).n);
+
+            if(G[i]->out.size() == 0 || G[i]->out[G[i]->out.size()-1]->index < pos) {
+                G[i]->out.push_back((*r).n);
+            }
+
+            (*r).n->in.push_back(G[i]);
+
+            if(G[i]->out[0] == (*r).n) {              
+                update.push_back(G[i]);
+            }
+        }
         }
 
         for(size_t i = pos+1; i < G.size(); i++) {
@@ -405,7 +473,8 @@ bool lazy_check(tcam &tmap, pc_rule *r, int pos, vector<pc_rule*> &pc, vector<st
     return false;
 }
 
-int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos, int up_bound){
+int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos, int up_bound, int invaild_pos) 
+{
     struct node *sn = NULL;
     struct node *wn = r->n;
     pc_rule sr; 
@@ -507,7 +576,7 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
         }
     }
 
-    Graph_add(tmap, pc_graph, G);
+    Graph_add(tmap, pc_graph, G, invaild_pos);
 
     return r->n->index;
 }
@@ -540,20 +609,20 @@ void tcam_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vect
         //cout<<"insert_pos = "<<insert_pos<<" max_overlap_pos = "<<max_overlap_pos<<endl;
     }
 
-    if(insert_pos < max_overlap_pos && insert_pos != -1) {
-        swap_insert(tmap, G, r, insert_pos, -1);
+    if(insert_pos == -1) {
+        //cout<<"insert_pos "<<insert_pos<<" max_overlap_pos "<<max_overlap_pos<<endl;
+        swap_insert(tmap, G, r, insert_pos, max_overlap_pos + 1, -1);
+    }
+    else if(insert_pos < max_overlap_pos) {
+        swap_insert(tmap, G, r, insert_pos, -1, -1);
         while(insert_pos < max_overlap_pos) {
             tmap.valid[insert_pos] = false;
-            insert_pos = swap_insert(tmap, G, r, G[insert_pos]->out[0]->index, insert_pos + 1); 
+            insert_pos = swap_insert(tmap, G, r, G[insert_pos]->out[0]->index, insert_pos + 1, insert_pos); 
         } 
-    }
-    else if(insert_pos == -1) {
-        //cout<<"insert_pos "<<insert_pos<<" max_overlap_pos "<<max_overlap_pos<<endl;
-        swap_insert(tmap, G, r, insert_pos, max_overlap_pos + 1);
     }
     else if(insert_pos > max_overlap_pos) {
         //cout<<"insert_pos "<<insert_pos<<" max_overlap_pos "<<max_overlap_pos<<endl;
-        swap_insert(tmap, G, r, insert_pos, -1);
+        swap_insert(tmap, G, r, insert_pos, -1, -1);
     }        
 }
 
@@ -1024,7 +1093,6 @@ int main(int argc, char *argv[])
     add_rule(tmap, G, pc_r[pc_r.size()-1], pc_r.size()-1, pc);
 
     cout<<"checking"<<endl;
-    //tcamcheck(pc, tmap.pc);
     tcamcheck(pc, tmap);
     cout<<"pc.size() = "<<pc.size()<<endl;
     cout<<"tmap.pc.size() = "<<tmap.pc.size()<<endl;

@@ -18,6 +18,10 @@ struct node {
     node () : index(-1), move(-1), cost(0),  valid(true), label(-1),  r(nullptr){
         
     }
+
+    bool operator < (const node &n) const {
+    return index < n.index;
+    }
 };
 
 
