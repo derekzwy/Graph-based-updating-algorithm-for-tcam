@@ -27,7 +27,10 @@ using namespace std;
 
 FILE *fpr;
 FILE *fpt;
-int reorder_cnt = 0;
+size_t cost;
+size_t max_cost;
+size_t reorder_cnt;
+size_t max_reorder_cnt;
 
 void parseargs(int argc, char *argv[]) {
     int	c;
@@ -72,7 +75,7 @@ void build_graph(vector<pc_rule*> &pc, vector<struct node *> &G)
 
     for(;i>=0;i--){
         //G[i]->index = i;
-        for(j=i+1;j<(ssize_t)pc.size();j++) {
+        for(j = i+1;j < (ssize_t)pc.size() ; j ++) {
             if(overlap(pc[i], pc[j])) {
                 G[i]->out.push_back(G[j]);
                 G[j]->in.push_back(G[i]);
@@ -122,19 +125,6 @@ void build_graph_fast(vector<pc_rule*> &pc, vector<struct node*> &G)
 
 }
 
-int dfs(struct node *n)
-{
-    if(n->move == -1) {
-        if(n->out.size() != 0)
-            n->move = dfs(n->out[0]) + 1;
-        else 
-            n->move = 1;
-    }
-    return n->move;
-}
-
-
-
 void compute_cost(struct node *n) 
 {
     int contribute = 0;
@@ -180,7 +170,16 @@ void compute_cost(struct node *n)
 //stored in TCAM. 
 //
 //
-
+int dfs(struct node *n)
+{
+    if(n->move == -1) {
+        if(n->out.size() != 0)
+            n->move = dfs(n->out[0]) + 1;
+        else 
+            n->move = 1;
+    }
+    return n->move;
+}
 
 void del_rule(tcam & tmap, vector<pc_rule*> &pc, pc_rule *r)
 {
@@ -222,30 +221,19 @@ void del_rule(tcam & tmap, vector<pc_rule*> &pc, pc_rule *r)
     pc.erase(tail, pc.end());
 }
 
+
 void updfs(struct node *n) 
 {
+    //n->move = -1;
     for(size_t i = 0; i < n->in.size(); i++) {
         struct node *p = n->in[i];
-        if(p->out[0] == n) {
-            updfs(p);
+        if(p->out.size() > 0) {
+            if(p->out[0] == n) {
+                p->move = n->move + 1;
+                updfs(p);
+            }
         }
     }
-
-    dfs(n);
-}
-
-void udfs(struct node *n) 
-{
-    n->move = -1;
-    for(size_t i = 0; i < n->in.size(); i++) {
-       struct node *p = n->in[i];
-       if(p->out[0] == n) {
-           udfs(p);
-       }
-    }
-
-    dfs(n);
-    //compute_cost(n);
 }
 
 void Graph_del(pc_rule *r)
@@ -284,7 +272,7 @@ bool cmp(const node* n1, const node* n2)
     return n1->index < n2->index;
 }
 
-void Graph_adjust(tcam & tmap, vector<pc_rule *> &pc_graph, int invaild_pos)
+void Graph_adjust(tcam & tmap, vector<pc_rule> pc_graph, int invaild_pos)
 {
 
     int interval_start;
@@ -294,79 +282,95 @@ void Graph_adjust(tcam & tmap, vector<pc_rule *> &pc_graph, int invaild_pos)
         start = 0;
     }
     else {
-        interval_start = pc_graph[0]->n->index;
+        interval_start = pc_graph[0].n->index;
         //interval_start = (*pc_graph.begin())->n->index;
         start = 1;
     }
 
     for(int i = start; i < (int)pc_graph.size(); i ++)  
     {
-       for(auto parent = pc_graph[i]->n->in.begin(); parent != pc_graph[i]->n->in.end(); parent ++)  
+       for(auto parent = pc_graph[i].n->in.begin(); parent != pc_graph[i].n->in.end(); parent ++)  
        { 
         if(tmap.valid[(*parent)->index] == true ) {
-            
-            struct node *n= pc_graph[i]->n;
+            int ex_move = -1;
+            if((*parent)->out.size() > 0) {
+                ex_move = (*parent)->out[0]->move;
+            }
+            struct node *n= pc_graph[i].n;
             auto tail = remove_if((*parent)->out.begin(), (*parent)->out.end(), [n](struct node *outn){return outn == n;});
             if(tail != (*parent)->out.end()) {
-                if((*parent)->out[0] == pc_graph[i]->n) {
-                    (*parent)->out.erase((*parent)->out.begin());
-                    (*parent)->move = -1;
-                    dfs((*parent));
+                (*parent)->out.erase(tail, (*parent)->out.end());
+                auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i].n, cmp);
+                (*parent)->out.insert(insert_pos, pc_graph[i].n);
+
+                if((*parent)->out[0]->move != ex_move) {
+                    (*parent)->move = (*parent)->out[0]->move + 1;
+                    updfs((*parent));
                 }
-                else {
-                    //struct node *n= pc_graph[i]->n;
-                    //auto tail = remove_if((*parent)->out.begin(), (*parent)->out.end(), [n](struct node *outn){return outn == n;});
-                    (*parent)->out.erase(tail, (*parent)->out.end());
-                }
-                auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i]->n, cmp);
-                (*parent)->out.insert(insert_pos, pc_graph[i]->n);
             }
             else {
-                if((*parent)->index > interval_start && (*parent)->index < pc_graph[i]->n->index) {
-                    //(*parent)->valid = true;
-                    auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i]->n, cmp);
-                    (*parent)->out.insert(insert_pos, pc_graph[i]->n);
+                if((*parent)->index > interval_start && (*parent)->index < pc_graph[i].n->index) {
+                    if((*parent)->out.size() > 0) {
+                        //ex_move = (*parent)->out[0]->move;
+                        auto insert_pos = lower_bound((*parent)->out.begin(), (*parent)->out.end(), pc_graph[i].n, cmp);
+                        (*parent)->out.insert(insert_pos, pc_graph[i].n);
+                        if(insert_pos == (*parent)->out.begin()) {
+                            if(pc_graph[i].n->move != ex_move) {
+                                (*parent)->move = pc_graph[i].n->move + 1;
+                                updfs((*parent));
+                            }
+                        }
+                    }
+                    else {
+                        (*parent)->out.insert((*parent)->out.begin(), pc_graph[i].n);
+                        (*parent)->move = pc_graph[i].n->move + 1;
+                        updfs((*parent));
+                    }
                 }
             }
         }
     }           
-    interval_start = pc_graph[i]->n->index;
+    interval_start = pc_graph[i].n->index;
     }
 }
 
 void Graph_add(tcam &tmap, pc_rule *r, vector<pc_rule *> &out_rule, vector<pc_rule *> &in_rule, int insert_pos) 
 {
     for(auto out = out_rule.begin(); out != out_rule.end(); out ++) {
-        /*if(tmap.valid[(*out)->n->index] == false)
-            getchar();*/
+        if(tmap.valid[(*out)->n->index] == false)
+            getchar();
         (*out)->n->in.push_back(r->n);
 
         auto pos = lower_bound(r->n->out.begin(), r->n->out.end(), (*out)->n, cmp);
         r->n->out.insert(pos, (*out)->n);
     }
 
-    list<struct node *> update;
+    dfs(r->n);
+
     for(auto in = in_rule.begin(); in != in_rule.end(); in ++) {
-        /*if(tmap.valid[(*in)->n->index] == false)
-            getchar();*/
+        if(tmap.valid[(*in)->n->index] == false)
+            getchar();
         r->n->in.push_back((*in)->n);
 
         if((*in)->n->index < insert_pos) {
-            auto pos = lower_bound((*in)->n->out.begin(), (*in)->n->out.end(), r->n, cmp);
-            (*in)->n->out.insert(pos, r->n);
-            if((*in)->n->out[0] == r->n) {
-                update.push_back((*in)->n);
+            if((*in)->n->out.size() > 0) {
+                int ex_move = (*in)->n->out[0]->move;
+                auto pos = lower_bound((*in)->n->out.begin(), (*in)->n->out.end(), r->n, cmp);
+                (*in)->n->out.insert(pos, r->n);
+                
+                if(pos == (*in)->n->out.begin()) {
+                    if(r->n->move != ex_move) {
+                        (*in)->n->move = r->n->move + 1;
+                        updfs((*in)->n);
+                    }
+                }
+            }
+            else {
+                (*in)->n->out.insert((*in)->n->out.begin(), r->n);
+                (*in)->n->move = r->n->move + 1;
+                updfs((*in)->n);
             }
         }
-    }
-
-    for(auto n = update.begin(); n != update.end(); n ++) {
-        udfs(*n);
-    }
-
-    //if no nodes need to update, we should at least update the r.n
-    if(update.size() == 0) {
-        dfs((*r).n);
     }
 }
 
@@ -377,7 +381,7 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
     pc_rule sr; 
     pc_rule wr = *r;
 
-    vector <pc_rule*> pc_graph;
+    vector <pc_rule> pc_graph;
 
     int empty_flag = 0;
 
@@ -390,14 +394,20 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
                     wr.priority = i;
                     wn->index = i;
                     //update Graph
+                    //wn->valid = true;
                     G[i] = wn;
                     G[i]->index = i;
+                    //G[i]->valid = true;
                     //update tcam
                     tmap.pc[i] = wr; 
                     tmap.valid[i] = true;
+                    //tmap.pc[i].n->valid = true; 
+                    /*if(G[i]->valid == false) {
+                        cout<<"can not change"<<endl;
+                        getchar();
+                    }*/
 
-                    pc_graph.push_back(&(tmap.pc[i]));
-                    //pc_graph.push_back(&wr);
+                    pc_graph.push_back(tmap.pc[i]);
 
                     empty_flag = 1;
                     break;
@@ -419,10 +429,11 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
             //update Graph
             G[insert_pos] = wn;
             G[insert_pos]->index = insert_pos;
+            //G[insert_pos]->valid = true;
             //update tcam
             tmap.pc[insert_pos] = wr;       
 
-            pc_graph.push_back(&(tmap.pc[insert_pos]));
+            pc_graph.push_back(tmap.pc[insert_pos]);
 
             wn = sn;
             wr = sr;
@@ -445,14 +456,19 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
                 wr.priority = i;
                 wn->index = i;
                 //update Graph
+                //wn->valid = true;
                 G[i] = wn;
                 G[i]->index = i;
+                //G[i]->valid = true;
                 //update tcam
                 tmap.pc[i] = wr; 
-                tmap.valid[i] = true;      
-                pc_graph.push_back(&(tmap.pc[i]));
-                //pc_graph.push_back(&wr);
-
+                tmap.valid[i] = true; 
+                //tmap.pc[i].n->valid = true;     
+                pc_graph.push_back(tmap.pc[i]);
+                /*if(G[i]->valid == false) {
+                    cout<<"can not change"<<endl;
+                    getchar();
+                }*/
                 empty_flag = 1;
                 break;
             }
@@ -462,6 +478,7 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
             //update Graph
             G.push_back(wn);
             G[G.size() -1]->index = G.size() - 1;
+            //G[G.size() -1]->valid = true;
             //update rule
             wr.priority = G.size() - 1;
             wn->index = G.size() - 1;
@@ -469,15 +486,18 @@ int swap_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int insert_pos
             tmap.pc.push_back(wr);
             tmap.valid.push_back(true);
 
-            pc_graph.push_back(&(tmap.pc[G.size() - 1]));
-            //pc_graph.push_back(&wr);
+            pc_graph.push_back(tmap.pc[G.size() - 1]);
         }
+    }
+
+    cost += pc_graph.size() - 1;
+    if(pc_graph.size() - 1 > max_cost) {
+        max_cost = pc_graph.size() - 1;
     }
 
     if(pc_graph.size() > 1) {
         Graph_adjust(tmap, pc_graph, invaild_pos);
     }
-    //pc_graph.clear();
     return r->n->index;
 }
 
@@ -488,6 +508,13 @@ void tcam_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vect
     for(size_t i = pos; i< pc.size(); i++) {
         if(overlap(pc[i], r)) {
             out_rule.push_back(pc[i]);
+            if(G[pc[i]->n->index]->valid == false) {
+                if(tmap.valid[pc[i]->n->index] == false){
+                    cout<<"tcam item false"<<endl;
+                }
+                cout<<"out pc G false"<<endl;
+                getchar();
+            }
             if(insert_pos == -1) {
                 insert_pos = pc[i]->n->index;
             }
@@ -502,6 +529,13 @@ void tcam_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vect
     for(int i = 0; i < pos; i++){
         if(overlap(pc[i], r)) {
             in_rule.push_back(pc[i]);
+            if(G[pc[i]->n->index]->valid == false) {
+                if(tmap.valid[pc[i]->n->index] == false){
+                    cout<<"tcam item false"<<endl;
+                }
+                cout<<"in pc G false"<<endl;
+                getchar();
+            }
             if(pc[i]->n->index > insert_pos) {
                 if(pc[i]->n->index > max_overlap_pos) {
                     max_overlap_pos = pc[i]->n->index;
@@ -518,10 +552,23 @@ void tcam_insert(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vect
     else if(insert_pos < max_overlap_pos) {
         swap_insert(tmap, G, r, insert_pos, -1, -1);
         Graph_add(tmap, r, out_rule, in_rule, insert_pos);
+        size_t tmp_reorder_cnt = 0; 
+        int false_pos;
         while(insert_pos < max_overlap_pos) {
-            tmap.valid[insert_pos] = false;
+            ///cout<<"reorder insert"<<endl;
+            int false_pos = insert_pos;
+            /*tmap.valid[insert_pos] = false;
+            G[insert_pos]->valid = false;*/
             insert_pos = swap_insert(tmap, G, r, G[insert_pos]->out[0]->index, insert_pos + 1, insert_pos); 
+            tmap.valid[false_pos] = false;
+            G[false_pos]->valid = false;
+            //tmap.pc[false_pos].n->valid = false;
+            tmp_reorder_cnt ++;
         } 
+        reorder_cnt += tmp_reorder_cnt;
+        if(tmp_reorder_cnt > max_reorder_cnt) {
+            max_reorder_cnt = tmp_reorder_cnt;
+        }
     }
     else if(insert_pos > max_overlap_pos) {
         //cout<<"insert_pos "<<insert_pos<<" max_overlap_pos "<<max_overlap_pos<<endl;
@@ -537,14 +584,8 @@ void add_rule(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vector<
     //then update the graph.
     
     r->n = new node();
-    //first lazy check
     
-    //if(!lazy_check(tmap, r, pos, pc, G)) {
-        //cout<<"before tcam_insert ruleid "<<r->ruleid<<endl;
-        tcam_insert(tmap, G, r, pos, pc); 
-        //cout<<"after tcam_insert ruleid "<<r->ruleid<<endl;
-
-    //}
+    tcam_insert(tmap, G, r, pos, pc); 
 
     pc.insert(pc.begin() + pos, r);
 
@@ -563,41 +604,56 @@ void add_rule(tcam & tmap, vector<struct node*> &G, pc_rule *r, int pos, vector<
 
 
 
-void measure(vector<struct node*> &G) 
+double measure(vector<struct node*> &G, int measure_type) 
 {
-    vector<struct node*> root;
+    if(measure_type == 0) {
+        vector<struct node*> root;
 
-    for(size_t i = 0; i< G.size() ;  i++) {
-        if(G[i]->out.size() == 0 && G[i]->valid) {
-            G[i]->move = 1;
+        for(size_t i = 0; i< G.size() ;  i++) {
+            /*if(G[i]->out.size() == 0 && G[i]->valid) {
+                G[i]->move = 1;
+            }*/
+            if(G[i]->in.size() == 0 && G[i]->valid) {
+                root.push_back(G[i]);
+            }
         }
-        if(G[i]->in.size() == 0 && G[i]->valid) {
-            root.push_back(G[i]);
-        }
-    }
 
-    for(size_t i = 0; i < root.size(); i++) {
-        dfs(root[i]);
-    }
-    for(size_t i = 0; i< G.size(); i++) {
-        if(G[i]->move == -1 && G[i]->valid)
-            updfs(G[i]);
+        for(size_t i = 0; i < root.size(); i++) {
+            dfs(root[i]);
+        }
+        for(size_t i = 0; i < G.size(); i++) {
+            if(G[i]->move == -1 && G[i]->valid) {
+                dfs(G[i]);
+                updfs(G[i]);
+            }
+        }
     }
     
     //compute avearage move
     int sum = 0;
     int max_move = 0;
     int valid_cnt = 0;
+    int invaild_cnt = 0;
     for(size_t i = 0; i < G.size(); i++) {
         if(G[i]->valid == true) {
+            if(G[i]->move < 1) {
+                cout<<"error: G[i]->move = "<<G[i]->move<<" < 1"<<endl;
+                getchar();
+            }
             sum += G[i]->move;
             if(G[i]->move > max_move)
                 max_move = G[i]->move;
             valid_cnt ++;
         }
+        else {
+            invaild_cnt ++;
+        }
     }
     cout <<"max move "<<max_move<<endl;
     cout <<"average move "<<(double)sum/valid_cnt<<endl;
+    cout<<"number of vaild nodes "<<valid_cnt<<endl;
+    cout<<"number of invaild nodes "<<invaild_cnt<<endl;
+    return (double)sum/valid_cnt;
 
 
     //compute cost
@@ -784,16 +840,13 @@ int label_node(struct node *n)
     return n->label;
 }
 
-void zo_split(vector<struct node *> &G, vector<struct node *> &subG1, vector<struct node *> &subG2)
+void zo_split(vector<struct node *> &G, vector<struct node *> &subG1, vector<struct node *> &subG2, vector<pc_rule*> &pc_0, vector<pc_rule*> &pc_1)
 {
     cout << endl;
-    cout << "0 - 1 split" <<endl;
+    //cout << "0 - 1 split" <<endl;
     for(size_t i = 0; i< G.size(); i++) {
         label_node(G[i]);
     }
-
-    vector<pc_rule*> pc_0;
-    vector<pc_rule*> pc_1;
 
     for(size_t i = 0; i < G.size(); i++) {
         if(G[i]->label == 0) {
@@ -807,12 +860,12 @@ void zo_split(vector<struct node *> &G, vector<struct node *> &subG1, vector<str
     vector<struct node *> G0;
     vector<struct node *> G1;
 
-    cout<<"split sets 0 " << pc_0.size()<<endl;
+    //cout<<"split sets 0 " << pc_0.size()<<endl;
     build_graph(pc_0, G0);
-    measure(G0);
-    cout<<"split sets 1 " << pc_1.size()<<endl;
+    //measure(G0);
+    //cout<<"split sets 1 " << pc_1.size()<<endl;
     build_graph(pc_1, G1);
-    measure(G1);
+    //measure(G1);
 
 
     subG1 = move(G0);
@@ -833,7 +886,7 @@ void filtering_largerules(vector<pc_rule*> &in, vector<pc_rule*> &out, vector<pc
 
 }
 
-void hybrid_arch(vector<pc_rule*> &in)
+/*void hybrid_arch(vector<pc_rule*> &in)
 {
     cout<<endl<<"Hybrid arch" <<endl;
     vector<pc_rule*> filtering;
@@ -884,28 +937,26 @@ void pure_arch(vector<pc_rule*> &in)
     zo_split(G2, subG1, subG2);
     zo_split(subG2, subG3, subG4);
 
-}
+}*/
 
 int linear_search_pc(vector <pc_rule*> &pc, unsigned *ft){
     //cout<<"pc priority"<<endl;
     int count = -1;
     for(auto r = pc.begin(); r != pc.end(); r++){
-        //cout<<(*r)->priority<<" ";
         count ++;
         if(ft[0] <= (*r)->field[0].high && ft[0] >= (*r)->field[0].low &&
             ft[1] <= (*r)->field[1].high && ft[1] >= (*r)->field[1].low &&
             ft[2] <= (*r)->field[2].high && ft[2] >= (*r)->field[2].low &&
             ft[3] <= (*r)->field[3].high && ft[3] >= (*r)->field[3].low &&
             ft[4] <= (*r)->field[4].high && ft[4] >= (*r)->field[4].low) {
-        return (*r)->ruleid;  
-    }
-    //cout<<endl;
+                return (*r)->ruleid;  
+        }
     }
     return -1;
 }
 
-int linear_search_tcam(tcam &tmap, unsigned *ft){
-    for(size_t i = 0; i < tmap.pc.size(); i++){
+int linear_search_tcam(tcam &tmap, unsigned *ft) {
+    for(size_t i = 0; i < tmap.pc.size(); i++) {
         if(tmap.valid[i] == true){
             if(ft[0] <= tmap.pc[i].field[0].high && ft[0] >= tmap.pc[i].field[0].low &&
             ft[1] <= tmap.pc[i].field[1].high && ft[1] >= tmap.pc[i].field[1].low &&
@@ -919,19 +970,20 @@ int linear_search_tcam(tcam &tmap, unsigned *ft){
     return -1;
 }
 
-
-//void tcamcheck(vector<pc_rule*> &pc, vector<pc_rule> &tcampc)
-void tcamcheck(vector<pc_rule*> &pc, tcam &tmap)
+void tcamcheck(vector<pc_rule*> &pc, tcam &tmap1, tcam &tmap3, tcam &tmap4)
 {
     field_type header[MAXDIMENSIONS];
+    int junk;
     int fid;
     int pc_ret, tcampc_ret;
     int trace_cnt = 0;
-    int dismactch_cnt = 0;
+    int dismactch_cnt = 0;  
+    int tmp;
     //int nf_cnt = 0;
     if(fpt != NULL){
         cout<<"loading trace"<<endl;
-        while(fscanf(fpt, "%u %u %d %d %d %d\n", &header[0], &header[1], &header[2], &header[3], &header[4], &fid) == 6){
+        //while(fscanf(fpt, "%u %u %d %d %d %d\n", &header[0], &header[1], &header[2], &header[3], &header[4], &fid) == 6){
+        while(fscanf(fpt, "%u %u %d %d %d %u %d\n", &header[0], &header[1], &header[2], &header[3], &header[4], &junk, &fid) == 7){
             trace_cnt ++;
             pc_ret = linear_search_pc(pc, header);
             /*if(pc_ret != fid){
@@ -939,13 +991,30 @@ void tcamcheck(vector<pc_rule*> &pc, tcam &tmap)
                 cout<<"pc_ret = "<<pc_ret<<endl;
                 cout<<"fid = "<<fid<<endl;
             }*/
-            //tcampc_ret = linear_search_tcam(tcampc, header);
-            tcampc_ret = linear_search_tcam(tmap, header);
+            tcampc_ret = -1;
+            tmp = linear_search_tcam(tmap1, header);
+            if(tmp != -1) {
+                tcampc_ret = tmp;
+            }
+            tmp = linear_search_tcam(tmap3, header);
+            if(tmp != -1) {
+                if(tcampc_ret == -1 || tcampc_ret > tmp) {
+                    tcampc_ret = tmp;
+                }
+            }
+            tmp = linear_search_tcam(tmap4, header);
+            if(tmp != -1) {
+                if(tcampc_ret == -1 || tcampc_ret > tmp) {
+                    tcampc_ret = tmp;
+                }
+            }
+
             /*if(pc_ret == tcampc_ret && pc_ret == -1){
                 nf_cnt++;
                 cout<<"rule not found nf count:"<<nf_cnt<<endl;
                 cout<<"fid = "<<fid<<endl<<endl;
             }*/
+
             if(pc_ret != tcampc_ret){
                 dismactch_cnt++;
                 cout<<"pc_ret != tcampc_ret dismactch count:"<<dismactch_cnt<<endl;
@@ -958,13 +1027,17 @@ void tcamcheck(vector<pc_rule*> &pc, tcam &tmap)
     }
 }
 
+bool cmp_r(const pc_rule* p1, const pc_rule* p2)
+{
+    return p1->ruleid < p2->ruleid;
+}
 
 int main(int argc, char *argv[])
 {
 
     vector<pc_rule> pc_orig;
     vector<pc_rule> pc_prefix;
-    vector<pc_rule*> pc;
+    //vector<pc_rule*> pc;
 
     parseargs(argc, argv);
     loadrules(fpr, pc_orig);
@@ -974,38 +1047,224 @@ int main(int argc, char *argv[])
 
     //pure_arch(pc_r); 
     //hybrid_arch(pc_r);
+    vector <pc_rule*> pc_old;
+    vector <pc_rule*> pc_new;
+    for(size_t i = 0; i < pc_r.size(); i ++) {
+        if(i % 5 != 0) {
+            pc_old.push_back(pc_r[i]);
+        }
+        else {
+            pc_new.push_back(pc_r[i]);
+        }
+    }
+    //cout<<pc_old.size()<<" "<<pc_new.size()<<" "<<pc_r.size()<<endl;
 
-    tcam tmap;
+    double lower_cst_bnd = 0;
+    double min_avg_cost = 0;
     vector<struct node*> G;
-    for(size_t i = 0; i < (pc_r.size()-1)/2; i++) {
-        add_rule(tmap, G, pc_r[2*i+1], i, pc);
-        /*if(pc_r[2*i+1]->ruleid == 3976){
-            cout<<"first round"<<endl;
-            getchar();
-        }*/
-    }
-    cout<<"begin to insert new rules"<<endl;
-    int count = 0;
-    struct timeval start, end;
-    gettimeofday(&start, NULL);
-    for(size_t i = 0; i < pc_r.size()/2; i++) {
-        count ++;
-        add_rule(tmap, G, pc_r[2*i], 2*i, pc);
-        /*if(pc_r[2*i]->ruleid == 3976){
-            cout<<"second round"<<endl;
-            getchar();
-        }*/
-    }
-    add_rule(tmap, G, pc_r[pc_r.size()-1], pc_r.size()-1, pc);
-    gettimeofday(&end, NULL);
-    int time_use = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
-    cout<<"finish inserting "<<count<<" rules"<<endl;
-    cout<<"use time "<<time_use<<" us"<<endl;
+    build_graph(pc_old, G);
 
-    cout<<"checking"<<endl;
-    tcamcheck(pc, tmap);
-    cout<<"pc.size() = "<<pc.size()<<endl;
-    cout<<"tmap.pc.size() = "<<tmap.pc.size()<<endl;
+    vector<pc_rule*> pc_1;
+    vector<pc_rule*> pc_2;
+    vector<pc_rule*> pc_3;
+    vector<pc_rule*> pc_4;
+    vector<struct node *> subG1;
+    vector<struct node *> subG2; 
+    vector<struct node *> subG3;
+    vector<struct node *> subG4;
+    double cost1 = 0;
+    double cost3 = 0;
+    double cost4 = 0;
+
+    cout<<endl<<"******before 0-1 split******"<<endl;
+    if(measure(G, 0) > lower_cst_bnd) {        
+         zo_split(G, subG1, subG2, pc_1, pc_2);
+         cout<<"******split set 0******"<<endl;
+         cout<<"size of set0 "<<pc_1.size()<<endl;
+         cost1 = measure(subG1, 0);
+         min_avg_cost = cost1;
+         cout<<"******split set 1******"<<endl;
+         cout<<"size of set1 "<<pc_2.size()<<endl;
+         if(measure(subG2, 0) > lower_cst_bnd) {        
+            zo_split(subG2, subG3, subG4, pc_3, pc_4);  
+            cout<<"******split set 0******"<<endl;
+            cout<<"size of set0 "<<pc_3.size()<<endl;
+            cost3 = measure(subG3, 0);
+            if(cost3 < min_avg_cost) {
+                min_avg_cost = cost3;
+            }
+            cout<<"******split set 1******"<<endl;
+            cout<<"size of set 1 "<<pc_4.size()<<endl; 
+            cost4 = measure(subG4, 0);  
+            if(cost4 < min_avg_cost) {
+                min_avg_cost = cost4;
+            }       
+         }     
+    }
+
+    /*tcam tmap1;
+    subG1.clear();
+    vector<pc_rule*> pc_1_tmp;
+    for(size_t i = 0; i < pc_1.size(); i ++) {
+        add_rule(tmap1, subG1 ,pc_1[i], i, pc_1_tmp);
+    }
+    tcam tmap3;
+    subG3.clear();
+    vector<pc_rule*> pc_3_tmp;
+    for(size_t i = 0; i < pc_3.size(); i ++) {
+        add_rule(tmap3, subG3 , pc_3[i], i, pc_3_tmp);
+    }
+    tcam tmap4;
+    subG4.clear();
+    vector<pc_rule*> pc_4_tmp;
+    for(size_t i = 0; i < pc_4.size(); i ++) {
+        add_rule(tmap4, subG4 , pc_4[i], i, pc_4_tmp);
+    }*/
+
+    tcam tmap1;
+    for(size_t i = 0; i < pc_1.size(); i ++) {
+        tmap1.pc.push_back(*(pc_1[i]));
+        tmap1.valid.push_back(true);
+    }
+    tcam tmap3;
+    for(size_t i = 0; i < pc_3.size(); i ++) {
+        tmap3.pc.push_back(*(pc_3[i]));
+        tmap3.valid.push_back(true);
+    }
+    tcam tmap4;
+    for(size_t i = 0; i < pc_4.size(); i ++) {
+        tmap4.pc.push_back(*(pc_4[i]));
+        tmap4.valid.push_back(true);
+    }
+
+    cout<<endl<<"begin to insert new rules"<<endl;
+    cost = 0;
+    max_cost = 0;
+    reorder_cnt = 0;
+    max_reorder_cnt = 0;
+    int rules_cnt = 0;
+    struct timeval start, end;
+
+    size_t check_pos = 0;
+    size_t check_interval = 100;
+    //size_t check_interval = pc_new.size()/10;
+
+    gettimeofday(&start, NULL);
+
+
+    while(check_pos < pc_new.size()) {
+        int insert_pos;
+        if(min_avg_cost == cost4) {
+            cout<<"inserting in the tcam4"<<endl;
+            for(size_t i = check_pos; i < pc_new.size() && i < check_pos + check_interval; i ++) {
+                auto pos = lower_bound(pc_4.begin(), pc_4.end(), pc_new[i], cmp_r);
+                insert_pos = pos - pc_4.begin();
+                add_rule(tmap4, subG4 , pc_new[i], insert_pos, pc_4);
+                rules_cnt ++;
+            }
+            cout<<"******measure tcam4******"<<endl;
+            cout<<"tcam size "<<tmap4.pc.size()<<endl;
+            cost4 = measure(subG4, 1);
+            min_avg_cost = cost4;
+            if(min_avg_cost > cost1) {
+                min_avg_cost = cost1;
+            }
+            if(min_avg_cost > cost3) {
+                min_avg_cost = cost3;
+            }
+            cout<<endl;      
+        }
+        else if(min_avg_cost == cost3) {
+            cout<<"inserting in the tcam3"<<endl;
+            for(size_t i = check_pos; i < pc_new.size() && i < check_pos + check_interval; i ++) {
+                auto pos = lower_bound(pc_3.begin(), pc_3.end(), pc_new[i], cmp_r);
+                insert_pos = pos - pc_3.begin();
+                add_rule(tmap3, subG3 , pc_new[i], insert_pos, pc_3);
+                rules_cnt ++;
+            }
+            cout<<"******measure tcam3******"<<endl;
+            cout<<"tcam size "<<tmap3.pc.size()<<endl;
+            cost3 = measure(subG3, 1);
+            min_avg_cost = cost3;
+            if(min_avg_cost > cost1) {
+                min_avg_cost = cost1;
+            }
+            if(min_avg_cost > cost4) {
+                min_avg_cost = cost4;
+            }
+            cout<<endl;
+        }
+        /*else if(min_avg_cost == cost1) {
+            for(size_t i = 0; i < pc_new.size(); i ++) {
+                auto pos = lower_bound(pc_1_tmp.begin(), pc_1_tmp.end(), pc_new[i], cmp_r);
+                insert_pos = pos - pc_1_tmp.begin();
+                for(size_t j = 0; j < pc_1_tmp.size(); j ++) {
+                    if(pc_new[i]->ruleid < pc_1_tmp[j]->ruleid) {
+                        if(insert_pos != j) { 
+                            cout<<insert_pos<<" "<<j<<endl;
+                            getchar();
+                        }
+                        break;
+                    }
+                }
+                add_rule(tmap1, subG1 , pc_new[i], insert_pos, pc_1_tmp);
+                rules_cnt ++;
+            }
+        }*/
+        else if(min_avg_cost == cost1) {
+            cout<<"inserting in the tcam1"<<endl;
+            for(size_t i = check_pos; i < pc_new.size() && i < check_pos + check_interval; i ++) {
+                auto pos = lower_bound(pc_1.begin(), pc_1.end(), pc_new[i], cmp_r);
+                insert_pos = pos - pc_1.begin();
+                add_rule(tmap1, subG1 , pc_new[i], insert_pos, pc_1);
+                rules_cnt ++;
+            }
+            cout<<"******measure tcam1******"<<endl;
+            cout<<"tcam size "<<tmap1.pc.size()<<endl;
+            cost1 = measure(subG1, 1);
+            min_avg_cost = cost1;
+            if(min_avg_cost > cost3) {
+                min_avg_cost = cost3;
+            }
+            if(min_avg_cost > cost4) {
+                min_avg_cost = cost4;
+            }
+            cout<<endl;
+        }
+        check_pos += check_interval;
+    }
+
+
+    gettimeofday(&end, NULL);
+
+    double time_use = 1000000 * (end.tv_sec - start.tv_sec) + end.tv_usec - start.tv_usec;
+    cout<<"finish inserting "<<rules_cnt<<" rules"<<endl;
+    cout<<"use time "<<time_use<<" us"<<endl;
+    cout<<"average time "<<time_use/rules_cnt<<" us for inserting one rule"<<endl;
+
+    cout<<endl<<"total number of reorder "<<reorder_cnt<<endl;
+    cout<<"average number of reorder "<<(double)reorder_cnt/rules_cnt<<endl;
+    cout<<"max number of reorder "<<max_reorder_cnt<<endl;
+
+    cout<<endl<<"total movement cost "<<cost<<endl;
+    cout<<"average movement cost "<<(double)cost/rules_cnt<<endl;
+    cout<<"max movement cost "<<max_cost<<endl;
+
+    cout<<endl<<"******measure tcam1******"<<endl;
+    cout<<"tcam size "<<tmap1.pc.size()<<endl;
+    measure(subG1, 1);
+    cout<<"******measure tcam3******"<<endl;
+    cout<<"tcam size "<<tmap3.pc.size()<<endl;
+    measure(subG3, 1);
+    cout<<"******measure tcam4******"<<endl;
+    cout<<"tcam size "<<tmap4.pc.size()<<endl;
+    measure(subG4, 1);
+
+    cout<<endl<<"checking"<<endl;
+    //tcamcheck(pc, tmap);
+    tcamcheck(pc_r, tmap1, tmap3, tmap4);
+    cout<<"pc.size() = "<<pc_r.size()<<endl;
+    cout<<"tmap.pc.size() = "<<tmap1.pc.size() + tmap3.pc.size() + tmap4.pc.size()<<endl;
     cout<<"check over"<<endl;
 
     //double avg_move;
